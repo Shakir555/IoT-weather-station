@@ -38,8 +38,41 @@
  *
  * BSD Licensed as described in the file LICENSE
  */
-#include "dht.h"
 
+ /* Copyright (c) 2025 Shakir Salam <shakirsalam555@gmail.com> 
+ * (Contributed improvements in coding mechanism and syntax) 
+ */
+
+ /*
+  * Note:
+  * Select a suitable pull-up resistor to be connected to the selected GPIO line
+  *  __           ______          _______                              ___________________________
+  *    \    A    /      \   C    /       \   DHT duration_data_low    /                           \
+  *     \_______/   B    \______/    D    \__________________________/   DHT duration_data_high    \__ 
+  *
+  * Initializing communications with the DHT requires four 'phases' as follows:
+  * 
+  * Phase A = MCU pulls signal low for at least 18000 us
+  * Phase B = MCU allows signal to float back up and waits 20-40us for DHT pull it to low
+  * Phase C = DHT pulls signal low for ~80us
+  * Phase D = DHT lets signal float back up for ~80us
+  * 
+  * After the phases, the DHT transmit its first bit by holding the signal low for 50us
+  * and then letting it float back high for a period of time that depends on the data bit.
+  * duration_data_high is shorter than 50us for logic '0' and longer than 50us for logic '1'.
+  *
+  * Total of 40 bits are trandmitted sequentially. 
+  * These bits are read into a byte array of length 5
+  * The first and third bytes are humidity (%) and temperature (C), respectively.
+  * Bytes 2 and 4 are zero are zero filled and fifth is a checksum such that:
+  *
+  * byte_5 = (byte_1 + byte_2 + byte_3 + byte_4) & 0xFF
+  *
+  */
+
+
+//Libraries
+#include <dht.h>
 #include <freertos/FreeRTOS.h>
 #include <string.h>
 #include <esp_log.h>
@@ -48,41 +81,15 @@
 #include <esp_timer.h>
 #include <esp_idf_lib_helpers.h>
 
-// DHT timer precision in microseconds
+//DHT timer precision in microseconds
 #define DHT_TIMER_INTERVAL 2
-#define DHT_DATA_BITS 40
-#define DHT_DATA_BYTES (DHT_DATA_BITS / 8)
+#define DHT_DATA_BITS      40
+#define DHT_DATA_BYTES     (DHT_DATA_BITS / 8)
 
-/*
- *  Note:
- *  A suitable pull-up resistor should be connected to the selected GPIO line
- *
- *  __           ______          _______                              ___________________________
- *    \    A    /      \   C    /       \   DHT duration_data_low    /                           \
- *     \_______/   B    \______/    D    \__________________________/   DHT duration_data_high    \__
- *
- *
- *  Initializing communications with the DHT requires four 'phases' as follows:
- *
- *  Phase A - MCU pulls signal low for at least 18000 us
- *  Phase B - MCU allows signal to float back up and waits 20-40us for DHT to pull it low
- *  Phase C - DHT pulls signal low for ~80us
- *  Phase D - DHT lets signal float back up for ~80us
- *
- *  After this, the DHT transmits its first bit by holding the signal low for 50us
- *  and then letting it float back high for a period of time that depends on the data bit.
- *  duration_data_high is shorter than 50us for a logic '0' and longer than 50us for logic '1'.
- *
- *  There are a total of 40 data bits transmitted sequentially. These bits are read into a byte array
- *  of length 5.  The first and third bytes are humidity (%) and temperature (C), respectively.  Bytes 2 and 4
- *  are zero-filled and the fifth is a checksum such that:
- *
- *  byte_5 == (byte_1 + byte_2 + byte_3 + byte_4) & 0xFF
- *
- */
+//Tag Definition
+#define TAG "DHT_11"
 
-static const char *TAG = "dht";
-
+//Helper Macros
 #if HELPER_TARGET_IS_ESP32
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 #define PORT_ENTER_CRITICAL() portENTER_CRITICAL(&mux)
@@ -93,6 +100,7 @@ static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 #define PORT_EXIT_CRITICAL() portEXIT_CRITICAL()
 #endif
 
+//Log Definition
 #define CHECK_ARG(VAL) do { if (!(VAL)) return ESP_ERR_INVALID_ARG; } while (0)
 
 #define CHECK_LOGE(x, msg, ...) do { \
@@ -105,69 +113,70 @@ static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
     } while (0)
 
 
-/**
- * Wait specified time for pin to go to a specified state.
- * If timeout is reached and pin doesn't go to a requested state
- * false is returned.
- * The elapsed time is returned in pointer 'duration' if it is not NULL.
+//DHT 11 Wait Pin State Function
+/* Wait specified time for pin to go to a specified state.
+ * If timeout is reached and pin does not go to a requested state
+ * false is returned
+ * The elapsed time is returned in pointer 'duration' if it is not NULL
  */
-static esp_err_t dht_await_pin_state(gpio_num_t pin, uint32_t timeout,
-       int expected_pin_state, uint32_t *duration)
+ static esp_err_t dht_await_pin_state(gpio_num_t pin, uint32_t timeout,
+                                      int expected_pin_state,
+                                      uint32_t *duration)
 {
-    /* XXX dht_await_pin_state() should save pin direction and restore
-     * the direction before return. however, the SDK does not provide
-     * gpio_get_direction().
-     */
+    //XXX dht_await_pin_state() should save pin direction and restore
+    //the direction before return. However, the SDK does not provide
+    //gpio_get_direction()
     gpio_set_direction(pin, GPIO_MODE_INPUT);
+
     for (uint32_t i = 0; i < timeout; i += DHT_TIMER_INTERVAL)
     {
-        // need to wait at least a single interval to prevent reading a jitter
+        //Need to wait at least a single interval to prevent reading a jitter
         esp_rom_delay_us(DHT_TIMER_INTERVAL);
+
         if (gpio_get_level(pin) == expected_pin_state)
         {
             if (duration)
-                *duration = i;
+            *duration = i;
             return ESP_OK;
         }
     }
-
     return ESP_ERR_TIMEOUT;
 }
 
-/**
- * Request data from DHT and read raw bit stream.
- * The function call should be protected from task switching.
- * Return false if error occurred.
+//DHT 11 Fetch Data Function
+/* Request data from DHT and read raw bit stream
+ * The function call should be protected from task switching
+ * Return false if error occured
  */
-static inline esp_err_t dht_fetch_data(dht_sensor_type_t sensor_type, gpio_num_t pin, uint8_t data[DHT_DATA_BYTES])
+ static inline esp_err_t dht_fetch_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
+                                        uint8_t data[DHT_DATA_BYTES])
 {
     uint32_t low_duration;
     uint32_t high_duration;
 
-    // Phase 'A' pulling signal low to initiate read sequence
+    //'Phase A' pulling signal low to initiate read sequence
     gpio_set_direction(pin, GPIO_MODE_OUTPUT_OD);
     gpio_set_level(pin, 0);
     esp_rom_delay_us(sensor_type == DHT_TYPE_SI7021 ? 500 : 20000);
     gpio_set_level(pin, 1);
-
-    // Step through Phase 'B', 40us
+    //'Phase B', 40us
     CHECK_LOGE(dht_await_pin_state(pin, 40, 0, NULL),
-            "Initialization error, problem in phase 'B'");
-    // Step through Phase 'C', 88us
+               "Initialization error, problem in phase 'B");
+    //'Phase C', 88us
     CHECK_LOGE(dht_await_pin_state(pin, 88, 1, NULL),
-            "Initialization error, problem in phase 'C'");
-    // Step through Phase 'D', 88us
+               "Initialization error, problem in phase 'c");
+    //'Phase D', 88us
     CHECK_LOGE(dht_await_pin_state(pin, 88, 0, NULL),
-            "Initialization error, problem in phase 'D'");
-
-    // Read in each of the 40 bits of data...
+              "Initialization error, problem in phase 'D");
+    
+    // Read in each of the 40 bits of data
     for (int i = 0; i < DHT_DATA_BITS; i++)
     {
-        CHECK_LOGE(dht_await_pin_state(pin, 65, 1, &low_duration),
-                "LOW bit timeout");
+        CHECK_LOGE(dht_await_pin_state(pin, 65, 1, &low_duration), 
+                                       "LOW Bit timeout");
         CHECK_LOGE(dht_await_pin_state(pin, 75, 0, &high_duration),
-                "HIGH bit timeout");
-
+                                       "HIGH bit timeout");
+        
         uint8_t b = i / 8;
         uint8_t m = i % 8;
         if (!m)
@@ -175,17 +184,16 @@ static inline esp_err_t dht_fetch_data(dht_sensor_type_t sensor_type, gpio_num_t
 
         data[b] |= (high_duration > low_duration) << (7 - m);
     }
-
     return ESP_OK;
 }
 
-/**
- * Pack two data bytes into single value and take into account sign bit.
- */
-static inline int16_t dht_convert_data(dht_sensor_type_t sensor_type, uint8_t msb, uint8_t lsb)
+//DHT 11 Convert data function
+//Pack two data bytes into a single value and take into account sign bit
+static inline int16_t dht_convert_data(dht_sensor_type_t sensor_type, uint8_t msb,
+                                       uint8_t lsb)
 {
     int16_t data;
-
+    
     if (sensor_type == DHT_TYPE_DHT11)
     {
         data = msb * 10;
@@ -195,15 +203,17 @@ static inline int16_t dht_convert_data(dht_sensor_type_t sensor_type, uint8_t ms
         data = msb & 0x7F;
         data <<= 8;
         data |= lsb;
+        
         if (msb & BIT(7))
-            data = -data;       // convert it to negative
+            //Convert it to negative
+            data = -data; 
     }
-
     return data;
 }
 
+//DHT 11 read data Function
 esp_err_t dht_read_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
-        int16_t *humidity, int16_t *temperature)
+                        int16_t *humidity, int16_t *temperature)
 {
     CHECK_ARG(humidity || temperature);
 
@@ -214,6 +224,7 @@ esp_err_t dht_read_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
 
     PORT_ENTER_CRITICAL();
     esp_err_t result = dht_fetch_data(sensor_type, pin, data);
+
     if (result == ESP_OK)
         PORT_EXIT_CRITICAL();
 
@@ -232,17 +243,23 @@ esp_err_t dht_read_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
     }
 
     if (humidity)
+    {
         *humidity = dht_convert_data(sensor_type, data[0], data[1]);
+    }
+
     if (temperature)
+    {
         *temperature = dht_convert_data(sensor_type, data[2], data[3]);
+    }
 
     ESP_LOGD(TAG, "Sensor data: humidity=%d, temp=%d", *humidity, *temperature);
 
     return ESP_OK;
 }
 
+//DHT 11 read float data Function
 esp_err_t dht_read_float_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
-        float *humidity, float *temperature)
+                              float *humidity, float *temperature)
 {
     CHECK_ARG(humidity || temperature);
 
@@ -253,9 +270,14 @@ esp_err_t dht_read_float_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
         return res;
 
     if (humidity)
+    {
         *humidity = i_humidity / 10.0;
+    }
+
     if (temperature)
+    {
         *temperature = i_temp / 10.0;
+    }
 
     return ESP_OK;
 }
