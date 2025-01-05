@@ -43,24 +43,33 @@
  * @note A suitable pull-up resistor should be connected to the selected GPIO line
  *
  */
+
+/*Copywrite (c) 2025 Shakir Salam shakirsalam555@Gmail.com
+ *(Contributed improvements in coding mechanism and syntax)
+ */
+
+//DHT Header File
 #ifndef __DHT_H__
 #define __DHT_H__
 
+//Libraries
 #include <driver/gpio.h>
 #include <esp_err.h>
 
+//C++
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * Sensor type
- */
+//Sensor Type
 typedef enum
 {
-    DHT_TYPE_DHT11 = 0,   //!< DHT11
-    DHT_TYPE_AM2301,      //!< AM2301 (DHT21, DHT22, AM2302, AM2321)
-    DHT_TYPE_SI7021       //!< Itead Si7021
+    //DHT11
+    DHT_TYPE_DHT11 = 0,
+    //AM2301 (DHT21, DHT22, AM2302, AM2321)
+    DHT_TYPE_AM2031,
+    //itead Si7021
+    DHT_TYPE_SI7021
 } dht_sensor_type_t;
 
 /**
@@ -74,9 +83,10 @@ typedef enum
  * @param[out] humidity Humidity, percents * 10, nullable
  * @param[out] temperature Temperature, degrees Celsius * 10, nullable
  * @return `ESP_OK` on success
+ *
  */
-esp_err_t dht_read_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
-        int16_t *humidity, int16_t *temperature);
+ esp_err_t dht_read_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
+                         int16_t *humidity, int16_t *temperature);
 
 /**
  * @brief Read float data from sensor on specified pin
@@ -88,9 +98,10 @@ esp_err_t dht_read_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
  * @param[out] humidity Humidity, percents, nullable
  * @param[out] temperature Temperature, degrees Celsius, nullable
  * @return `ESP_OK` on success
+ *
  */
-esp_err_t dht_read_float_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
-        float *humidity, float *temperature);
+ esp_err_t dht_read_float_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
+                               float *humidity, float *temperature);
 
 #ifdef __cplusplus
 }
@@ -98,4 +109,4 @@ esp_err_t dht_read_float_data(dht_sensor_type_t sensor_type, gpio_num_t pin,
 
 /**@}*/
 
-#endif  // __DHT_H__
+#endif
