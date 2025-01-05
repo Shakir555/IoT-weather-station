@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sensor Data</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>Temperature and Humidity</h1>
+    <canvas id="sensorChart" width="400" height="200"></canvas>
+
+    <script>
+        async function fetchData() {
+            const response = await fetch('/api/sensor-data/');
+            return await response.json();
+        }
+
+        async function renderChart() {
+            const data = await fetchData();
+            const labels = data.map(d => new Date(d.timestamp).toLocaleTimeString());
+            const tempData = data.map(d => d.temperature);
+            const humidityData = data.map(d => d.humidity);
+
+            const ctx = document.getElementById('sensorChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Temperature (°C)',
+                            data: tempData,
+                            borderColor: 'red',
+                            fill: false,
+                        },
+                        {
+                            label: 'Humidity (%)',
+                            data: humidityData,
+                            borderColor: 'blue',
+                            fill: false,
+                        }
+                    ]
+                },
+            });
+        }
+
+        renderChart();
+    </script>
+</body>
+</html>
